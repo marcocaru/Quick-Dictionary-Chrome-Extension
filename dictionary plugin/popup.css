@@ -1,0 +1,612 @@
+@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&family=Google+Sans+Text:wght@400;500&display=swap');
+
+:root {
+  --md-sys-color-surface: #1C1B1F;
+  --md-sys-color-surface-container: #211F26;
+  --md-sys-color-surface-container-high: #2B2930;
+  --md-sys-color-on-surface: #E6E1E5;
+  --md-sys-color-on-surface-variant: #CAC4D0;
+  --md-sys-color-outline: #938F99;
+  --md-sys-color-outline-variant: #49454F;
+  --md-sys-color-primary: #D0BCFF;
+  --md-sys-color-on-primary: #381E72;
+  --md-sys-color-primary-container: #4F378B;
+  --md-sys-color-secondary: #CCC2DC;
+  --md-sys-color-tertiary: #EFB8C8;
+  --md-sys-color-error: #F2B8B5;
+  --md-sys-color-scrim: rgba(0, 0, 0, 0.6);
+  --md-elevation-2: 0 1px 2px rgba(0,0,0,0.3), 0 2px 6px 2px rgba(0,0,0,0.15);
+  --md-elevation-3: 0 4px 8px 3px rgba(0,0,0,0.15), 0 1px 3px rgba(0,0,0,0.3);
+  --md-elevation-4: 0 6px 10px 4px rgba(0,0,0,0.15), 0 2px 3px rgba(0,0,0,0.3);
+  --radius-xl: 28px;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --radius-xs: 4px;
+  --transition-standard: cubic-bezier(0.2, 0, 0, 1);
+  --transition-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --duration-short: 200ms;
+  --duration-medium: 300ms;
+  --duration-long: 400ms;
+}
+
+/* ── Container ───────────────────────────────────────────── */
+#dict-popup {
+  position: fixed;
+  z-index: 2147483647;
+  width: 348px;
+  background: var(--md-sys-color-surface-container);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--md-elevation-4);
+  font-family: 'Google Sans Text', 'Google Sans', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--md-sys-color-on-surface);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+  transform-origin: top left;
+  transition:
+    opacity var(--duration-medium) var(--transition-standard),
+    transform var(--duration-medium) var(--transition-emphasized);
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.06);
+  will-change: transform, opacity;
+}
+
+#dict-popup.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+#dict-popup.hiding {
+  opacity: 0;
+  transform: translateY(4px) scale(0.98);
+}
+
+/* ── Header strip ────────────────────────────────────────── */
+.dict-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px 0;
+  position: relative;
+}
+
+.dict-logo {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.dict-label {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--md-sys-color-outline);
+  flex: 1;
+}
+
+.dict-close-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--md-sys-color-on-surface-variant);
+  transition: background var(--duration-short) var(--transition-standard);
+  margin: -6px -6px -6px 0;
+  flex-shrink: 0;
+}
+
+.dict-close-btn:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+.dict-close-btn:active {
+  background: rgba(255,255,255,0.12);
+}
+
+/* ── Word + phonetic ─────────────────────────────────────── */
+.dict-word-section {
+  padding: 12px 20px 0;
+}
+
+.dict-word-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dict-word {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 26px;
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface);
+  line-height: 1.2;
+  letter-spacing: -0.3px;
+  flex: 1;
+}
+
+/* ── Audio pronunciation button ──────────────────────────── */
+.dict-audio-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(208, 188, 255, 0.1);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--md-sys-color-primary);
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+  transition:
+    background var(--duration-short) var(--transition-standard),
+    color var(--duration-short) var(--transition-standard),
+    transform var(--duration-short) var(--transition-standard);
+}
+
+.dict-audio-btn:hover {
+  background: rgba(208, 188, 255, 0.18);
+  transform: scale(1.05);
+}
+
+.dict-audio-btn:active {
+  background: rgba(208, 188, 255, 0.26);
+  transform: scale(0.95);
+}
+
+.dict-audio-btn[data-state="playing"] {
+  background: rgba(208, 188, 255, 0.2);
+  color: var(--md-sys-color-primary);
+}
+
+.dict-audio-btn[data-state="playing"]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--md-sys-color-primary);
+  opacity: 0;
+  animation: audioPulse 1.2s ease-out infinite;
+}
+
+@keyframes audioPulse {
+  0%   { transform: scale(0.85); opacity: 0.6; }
+  100% { transform: scale(1.4);  opacity: 0; }
+}
+
+.dict-audio-btn[data-state="error"] {
+  background: rgba(242, 184, 181, 0.12);
+  color: var(--md-sys-color-error);
+}
+
+.dict-audio-icon {
+  display: block;
+  flex-shrink: 0;
+}
+
+.dict-phonetic {
+  font-size: 13px;
+  color: var(--md-sys-color-primary);
+  margin-top: 3px;
+  font-weight: 400;
+  letter-spacing: 0.2px;
+}
+
+/* ── Divider ─────────────────────────────────────────────── */
+.dict-divider {
+  height: 1px;
+  background: var(--md-sys-color-outline-variant);
+  margin: 14px 20px 0;
+  opacity: 0.5;
+}
+
+/* ── Meanings ────────────────────────────────────────────── */
+.dict-meanings {
+  padding: 0 20px 4px;
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--md-sys-color-outline-variant) transparent;
+}
+
+.dict-meanings::-webkit-scrollbar {
+  width: 4px;
+}
+.dict-meanings::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dict-meanings::-webkit-scrollbar-thumb {
+  background: var(--md-sys-color-outline-variant);
+  border-radius: 2px;
+}
+
+.dict-meaning-block {
+  padding: 14px 0 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  animation: fadeSlideIn var(--duration-medium) var(--transition-standard) both;
+}
+
+.dict-meaning-block:last-child {
+  border-bottom: none;
+}
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Part of speech chip */
+.dict-pos-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 100px;
+  background: rgba(208, 188, 255, 0.12);
+  border: 1px solid rgba(208, 188, 255, 0.2);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  color: var(--md-sys-color-primary);
+  text-transform: italic;
+  margin-bottom: 10px;
+}
+
+/* Definition text */
+.dict-def {
+  font-size: 14px;
+  color: var(--md-sys-color-on-surface);
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+/* Example sentence */
+.dict-example {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-style: italic;
+  line-height: 1.5;
+  padding-left: 10px;
+  border-left: 2px solid var(--md-sys-color-outline-variant);
+}
+
+/* ── Clickable words inside definitions ──────────────────── */
+.dict-clickable-word {
+  cursor: pointer;
+  border-radius: 3px;
+  transition:
+    background var(--duration-short) var(--transition-standard),
+    color var(--duration-short) var(--transition-standard);
+  padding: 0 1px;
+  position: relative;
+}
+
+.dict-clickable-word:hover {
+  background: rgba(208, 188, 255, 0.15);
+  color: var(--md-sys-color-primary);
+}
+
+.dict-clickable-word:active {
+  background: rgba(208, 188, 255, 0.25);
+}
+
+/* ── Breadcrumb nav ──────────────────────────────────────── */
+.dict-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 10px 20px 0;
+  min-height: 0;
+}
+
+.dict-crumb {
+  font-size: 12px;
+  color: var(--md-sys-color-outline);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-xs);
+  transition: color var(--duration-short) var(--transition-standard),
+              background var(--duration-short) var(--transition-standard);
+  white-space: nowrap;
+}
+
+.dict-crumb:hover {
+  color: var(--md-sys-color-on-surface-variant);
+  background: rgba(255,255,255,0.06);
+}
+
+.dict-crumb-sep {
+  font-size: 12px;
+  color: var(--md-sys-color-outline-variant);
+  user-select: none;
+}
+
+.dict-crumb.active {
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Footer ──────────────────────────────────────────────── */
+.dict-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px 16px;
+  margin-top: 2px;
+}
+
+.dict-hint-text {
+  font-size: 11px;
+  color: var(--md-sys-color-outline);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dict-hint-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--md-sys-color-primary);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.dict-source-link {
+  font-size: 11px;
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  opacity: 0.8;
+  transition: opacity var(--duration-short) var(--transition-standard);
+  cursor: pointer;
+}
+
+.dict-source-link:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+/* ── Loading state ───────────────────────────────────────── */
+.dict-loading-section {
+  padding: 20px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dict-skeleton {
+  border-radius: 100px;
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.06) 25%,
+    rgba(255,255,255,0.1) 50%,
+    rgba(255,255,255,0.06) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+}
+
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.dict-skeleton-word  { height: 28px; width: 55%; }
+.dict-skeleton-ph    { height: 14px; width: 30%; margin-top: 2px; }
+.dict-skeleton-line1 { height: 13px; width: 90%; margin-top: 8px; }
+.dict-skeleton-line2 { height: 13px; width: 80%; margin-top: 6px; }
+.dict-skeleton-line3 { height: 13px; width: 65%; margin-top: 6px; }
+
+/* ── Error state ─────────────────────────────────────────── */
+.dict-error-section {
+  padding: 16px 20px 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.dict-error-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(242, 184, 181, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dict-error-icon svg {
+  color: var(--md-sys-color-error);
+}
+
+.dict-error-title {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface);
+}
+
+.dict-error-body {
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: 2px;
+}
+
+/* ── Word actions row (audio + star) ─────────────────────── */
+.dict-word-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* ── Star / save button ──────────────────────────────────── */
+.dict-star-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #F2C94C;
+  flex-shrink: 0;
+  transition:
+    background var(--duration-short) var(--transition-standard),
+    transform  var(--duration-short) var(--transition-standard);
+}
+
+.dict-star-btn:hover  { background: rgba(242,201,76,0.12); transform: scale(1.08); }
+.dict-star-btn:active { background: rgba(242,201,76,0.22); transform: scale(0.94); }
+
+/* ── Tabs (Definition / Synonyms) ───────────────────────── */
+.dict-tabs {
+  display: flex;
+  margin: 14px 20px 0;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.dict-tab {
+  flex: 1;
+  padding: 8px 0;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--md-sys-color-outline);
+  font-family: 'Google Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--duration-short) var(--transition-standard),
+              border-color var(--duration-short) var(--transition-standard);
+  letter-spacing: 0.2px;
+}
+
+.dict-tab:hover { color: var(--md-sys-color-on-surface-variant); }
+
+.dict-tab.active {
+  color: var(--md-sys-color-primary);
+  border-bottom-color: var(--md-sys-color-primary);
+}
+
+/* ── Tab content panes ───────────────────────────────────── */
+.dict-tab-content { position: relative; }
+
+.dict-pane {
+  display: none;
+  animation: fadeSlideIn var(--duration-medium) var(--transition-standard) both;
+}
+
+.dict-pane.active { display: block; }
+
+/* ── Synonyms / antonyms panel ───────────────────────────── */
+.dict-syn-section {
+  padding: 14px 20px 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--md-sys-color-outline-variant) transparent;
+}
+
+.dict-syn-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--md-sys-color-outline);
+  margin-bottom: 8px;
+}
+
+.dict-syn-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dict-syn-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 100px;
+  background: rgba(208, 188, 255, 0.1);
+  border: 1px solid rgba(208, 188, 255, 0.18);
+  color: var(--md-sys-color-primary);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background var(--duration-short) var(--transition-standard),
+    border-color var(--duration-short) var(--transition-standard);
+}
+
+.dict-syn-chip:hover {
+  background: rgba(208, 188, 255, 0.2);
+  border-color: rgba(208, 188, 255, 0.35);
+}
+
+.dict-ant-chip {
+  background: rgba(242, 184, 181, 0.08);
+  border-color: rgba(242, 184, 181, 0.18);
+  color: var(--md-sys-color-error);
+}
+
+.dict-ant-chip:hover {
+  background: rgba(242, 184, 181, 0.15);
+  border-color: rgba(242, 184, 181, 0.3);
+}
+
+.dict-syn-empty {
+  font-size: 13px;
+  color: var(--md-sys-color-outline);
+  font-style: italic;
+  padding: 8px 0;
+}
+
+/* ── Toast notification ──────────────────────────────────── */
+#dict-toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: #313033;
+  color: var(--md-sys-color-on-surface);
+  font-family: 'Google Sans Text', sans-serif;
+  font-size: 13px;
+  padding: 10px 20px;
+  border-radius: 100px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2147483647;
+  transition: opacity 200ms ease, transform 200ms ease;
+  white-space: nowrap;
+}
+
+#dict-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ── Ripple ──────────────────────────────────────────────── */
+@keyframes ripple {
+  to { transform: scale(4); opacity: 0; }
+}
