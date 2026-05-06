@@ -1,47 +1,151 @@
-{
-  "manifest_version": 3,
-  "name": "Quick Dictionary",
-  "version": "2.0",
-  "description": "Highlight any word to instantly see its definition, pronunciation, synonyms, and more.",
+'use strict';
 
-  "permissions": [
-    "activeTab",
-    "contextMenus",
-    "storage"
-  ],
+let activePanel = 'history';
+let allHistory = [];
+let allSaved = [];
+let filterText = '';
 
-  "host_permissions": [
-    "https://api.dictionaryapi.dev/*",
-    "https://ssl.gstatic.com/*",
-    "https://*.wikimedia.org/*",
-    "<all_urls>"
-  ],
+window.addEventListener('DOMContentLoaded', () => {
+  loadData();
 
-  "background": {
-    "service_worker": "background.js"
-  },
+  document.querySelectorAll('.tab').forEach(button => {
+    button.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+      button.classList.add('active');
+      activePanel = button.dataset.panel;
+      filterText = '';
+      document.getElementById('search-input').value = '';
+      renderList();
+    });
+  });
 
-  "action": {
-    "default_popup": "history.html",
-    "default_icon": {
-      "16":  "icons/icon16.png",
-      "48":  "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
+  document.getElementById('search-input').addEventListener('input', event => {
+    filterText = String(event.target.value || '').trim().toLowerCase();
+    renderList();
+  });
 
-  "icons": {
-    "16":  "icons/icon16.png",
-    "48":  "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
+  document.getElementById('clear-btn').addEventListener('click', () => {
+    const isHistory = activePanel === 'history';
+    const confirmed = confirm(isHistory ? 'Clear your lookup history?' : 'Remove all saved words?');
+    if (!confirmed) return;
 
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>", "file://*/*"],
-      "js": ["content.js"],
-      "css": ["popup.css"],
-      "run_at": "document_idle"
-    }
-  ]
+    chrome.runtime.sendMessage({ type: isHistory ? 'QD_CLEAR_HISTORY' : 'QD_CLEAR_SAVED' }, () => {
+      if (isHistory) allHistory = [];
+      else allSaved = [];
+      renderList();
+    });
+  });
+
+  document.getElementById('word-list').addEventListener('click', event => {
+    const button = event.target.closest('[data-toggle-save]');
+    if (!button) return;
+
+    const word = button.dataset.word || '';
+    const entry = (allSaved.find(item => item.word === word) || allHistory.find(item => item.word === word));
+    if (!entry) return;
+
+    chrome.runtime.sendMessage({ type: 'QD_TOGGLE_SAVED', entry }, response => {
+      const isSaved = Boolean(response?.isSaved);
+      if (isSaved) {
+        allSaved = [entry, ...allSaved.filter(item => item.word !== word)];
+      } else {
+        allSaved = allSaved.filter(item => item.word !== word);
+      }
+      renderList();
+    });
+  });
+});
+
+function loadData() {
+  chrome.runtime.sendMessage({ type: 'QD_GET_HISTORY' }, historyResponse => {
+    allHistory = historyResponse?.history || [];
+    chrome.runtime.sendMessage({ type: 'QD_GET_SAVED' }, savedResponse => {
+      allSaved = savedResponse?.saved || [];
+      renderList();
+    });
+  });
+}
+
+function renderList() {
+  const list = document.getElementById('word-list');
+  const data = activePanel === 'history' ? allHistory : allSaved;
+  const filtered = filterText
+    ? data.filter(item => String(item.word || '').toLowerCase().includes(filterText))
+    : data;
+
+  if (!filtered.length) {
+    list.innerHTML = `<div class="empty">${activePanel === 'history' ? 'No words looked up yet. Highlight a word, right-click, and choose QuickDictionary.' : 'No saved words yet. Save words from the popup to review them later.'}</div>`;
+    return;
+  }
+
+  if (activePanel === 'history') {
+    renderHistoryList(list, filtered);
+  } else {
+    renderSavedList(list, filtered);
+  }
+}
+
+function renderHistoryList(list, items) {
+  const groups = new Map();
+  items.forEach(item => {
+    const label = dateLabel(item.lookedUpAt);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(item);
+  });
+
+  let html = '';
+  for (const [label, group] of groups.entries()) {
+    html += `<div class="section-label">${label}</div>`;
+    html += group.map(renderRow).join('');
+  }
+  list.innerHTML = html;
+}
+
+function renderSavedList(list, items) {
+  list.innerHTML = `<div class="section-label">Saved words</div>${items.map(renderRow).join('')}`;
+}
+
+function renderRow(item) {
+  const saved = allSaved.some(savedItem => savedItem.word === item.word);
+  return `
+    <div class="item">
+      <div class="meta">
+        <div class="word">${escapeHTML(item.word || '')}</div>
+        <div class="detail">
+          ${item.pos ? `<span class="pos">${escapeHTML(item.pos)}</span>` : ''}
+          ${escapeHTML(item.definition || '')}
+        </div>
+      </div>
+      <div class="time">${timeLabel(item.savedAt || item.lookedUpAt)}</div>
+      <button class="star" data-toggle-save="true" data-word="${escapeHTML(item.word || '')}" title="${saved ? 'Remove from saved' : 'Save word'}" aria-label="${saved ? 'Remove from saved' : 'Save word'}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="${saved ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+        </svg>
+      </button>
+    </div>
+  `;
+}
+
+function dateLabel(timestamp) {
+  const date = new Date(timestamp || Date.now());
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 86400000);
+  const sameDay = (a, b) => a.toDateString() === b.toDateString();
+  if (sameDay(date, today)) return 'Today';
+  if (sameDay(date, yesterday)) return 'Yesterday';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function timeLabel(timestamp) {
+  if (!timestamp) return '';
+  return new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function escapeHTML(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }

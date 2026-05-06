@@ -1,317 +1,572 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Quick Dictionary</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&family=Google+Sans+Text:wght@400;500&display=swap" rel="stylesheet"/>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+(() => {
+  'use strict';
 
-    :root {
-      --surface:        #1C1B1F;
-      --surface-hi:     #2B2930;
-      --surface-lo:     #211F26;
-      --on-surface:     #E6E1E5;
-      --on-surface-var: #CAC4D0;
-      --outline:        #938F99;
-      --outline-var:    #49454F;
-      --primary:        #D0BCFF;
-      --primary-cont:   #4F378B;
-      --error:          #F2B8B5;
-      --gold:           #F2C94C;
+  const WIKTIONARY_API = 'https://en.wiktionary.org/api/rest_v1/page/definition/';
+  const FREE_DICT_API = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
+  const POPUP_MARGIN = 14;
+
+  let pointerX = window.innerWidth / 2;
+  let pointerY = window.innerHeight / 3;
+  let currentWord = '';
+  let currentData = null;
+  let currentAudio = null;
+  let currentAudioUrl = null;
+  let isCurrentSaved = false;
+  let isDragging = false;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+  let wasDragged = false;
+
+  const popup = document.createElement('div');
+  popup.id = 'dict-popup';
+  popup.setAttribute('role', 'dialog');
+  popup.setAttribute('aria-label', 'QuickDictionary definition');
+  document.documentElement.appendChild(popup);
+
+  document.addEventListener('mousemove', e => {
+    pointerX = e.clientX;
+    pointerY = e.clientY;
+    if (isDragging) performDrag(e);
+  });
+
+  document.addEventListener('mouseup', e => {
+    if (isDragging) endDrag(e);
+  });
+
+  document.addEventListener('mousedown', e => {
+    if (!popup.contains(e.target)) hidePopup();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') hidePopup();
+  });
+
+  chrome.runtime.onMessage.addListener(msg => {
+    if (msg.type !== 'QD_LOOKUP_WORD') return;
+    wasDragged = false;
+    openLookup(String(msg.word || ''));
+  });
+
+  popup.addEventListener('mousedown', e => {
+    if (e.target.closest('.dict-drag-handle')) {
+      startDrag(e);
+    }
+  });
+
+  popup.addEventListener('click', async e => {
+    if (wasDragged) return;
+
+    if (e.target.closest('#dict-close-btn')) {
+      hidePopup();
+      return;
     }
 
-    body {
-      width: 380px;
-      min-height: 480px;
-      max-height: 600px;
-      background: var(--surface);
-      color: var(--on-surface);
-      font-family: 'Google Sans Text', 'Google Sans', sans-serif;
-      font-size: 14px;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
+    if (e.target.closest('#dict-audio-btn')) {
+      playAudio();
+      return;
     }
 
-    /* ── Header ── */
-    .panel-header {
-      padding: 18px 20px 12px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      border-bottom: 1px solid var(--outline-var);
-      flex-shrink: 0;
+    if (e.target.closest('#dict-star-btn')) {
+      toggleSave();
+      return;
     }
 
-    .panel-logo {
-      width: 22px; height: 22px;
-      color: var(--primary);
+    const chip = e.target.closest('.dict-clickable-word');
+    if (chip?.dataset.word) {
+      wasDragged = false;
+      pointerX = popup.getBoundingClientRect().left + 80;
+      pointerY = popup.getBoundingClientRect().top + 80;
+      openLookup(chip.dataset.word);
+    }
+  });
+
+  async function openLookup(word) {
+    const cleanWord = sanitizeWord(word);
+    if (!cleanWord) return;
+
+    currentWord = cleanWord;
+    renderLoading(cleanWord);
+    positionPopup();
+
+    const [wiktionaryResult, freeDictResult] = await Promise.allSettled([
+      fetchWiktionary(cleanWord),
+      fetchFreeDictionary(cleanWord)
+    ]);
+
+    if (cleanWord !== currentWord) return;
+
+    const wiktionary = wiktionaryResult.status === 'fulfilled' ? wiktionaryResult.value : null;
+    const freeDict = freeDictResult.status === 'fulfilled' ? freeDictResult.value : null;
+
+    if (!wiktionary && !freeDict) {
+      renderError(cleanWord);
+      return;
     }
 
-    .panel-title {
-      font-family: 'Google Sans', sans-serif;
-      font-size: 16px;
-      font-weight: 500;
-      color: var(--on-surface);
-      flex: 1;
+    const data = mergeDictionaryData(cleanWord, wiktionary, freeDict);
+    currentData = data;
+    currentAudioUrl = data.audioUrl || null;
+
+    chrome.runtime.sendMessage({ type: 'QD_ADD_HISTORY', entry: buildStorageEntry(data) });
+    chrome.runtime.sendMessage({ type: 'QD_IS_SAVED', word: data.word }, response => {
+      isCurrentSaved = Boolean(response?.isSaved);
+      renderDefinition(data);
+    });
+  }
+
+  async function fetchWiktionary(word) {
+    const response = await fetch(`${WIKTIONARY_API}${encodeURIComponent(word.toLowerCase())}`, {
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) throw new Error('Wiktionary not found');
+    const json = await response.json();
+    const entries = json.en;
+    if (!Array.isArray(entries) || !entries.length) throw new Error('No English entry');
+
+    const meanings = [];
+    const synonyms = new Set();
+    const antonyms = new Set();
+
+    entries.forEach(entry => {
+      const defs = (entry.definitions || []).slice(0, 4).map(def => {
+        (def.synonyms || []).forEach(item => synonyms.add(typeof item === 'string' ? item : item.word));
+        (def.antonyms || []).forEach(item => antonyms.add(typeof item === 'string' ? item : item.word));
+        return {
+          definition: stripHTML(def.definition || ''),
+          example: def.parsedExamples?.[0]?.example ? stripHTML(def.parsedExamples[0].example) : ''
+        };
+      }).filter(item => item.definition);
+
+      (entry.synonyms || []).forEach(item => synonyms.add(typeof item === 'string' ? item : item.word));
+      (entry.antonyms || []).forEach(item => antonyms.add(typeof item === 'string' ? item : item.word));
+
+      if (defs.length) {
+        meanings.push({
+          partOfSpeech: entry.partOfSpeech || '',
+          definitions: defs
+        });
+      }
+    });
+
+    return {
+      word,
+      phonetic: '',
+      audioUrl: null,
+      meanings: meanings.slice(0, 4),
+      synonyms: [...synonyms].filter(Boolean).slice(0, 20),
+      antonyms: [...antonyms].filter(Boolean).slice(0, 20),
+      source: 'Wiktionary'
+    };
+  }
+
+  async function fetchFreeDictionary(word) {
+    const response = await fetch(`${FREE_DICT_API}${encodeURIComponent(word.toLowerCase())}`);
+    if (!response.ok) throw new Error('Free Dictionary not found');
+    const json = await response.json();
+    return json[0];
+  }
+
+  function mergeDictionaryData(word, wiktionary, freeDict) {
+    if (!wiktionary && freeDict) return normalizeFreeDictionary(freeDict);
+    if (!wiktionary) return null;
+
+    if (freeDict) {
+      const phoneticInfo = getPhoneticInfo(freeDict);
+      wiktionary.phonetic = phoneticInfo.text || wiktionary.phonetic;
+      wiktionary.audioUrl = phoneticInfo.audio ? normalizeAudio(phoneticInfo.audio) : null;
+
+      const synonyms = new Set(wiktionary.synonyms || []);
+      const antonyms = new Set(wiktionary.antonyms || []);
+      const addStrings = (values, bucket) => {
+        if (!Array.isArray(values)) return;
+        values.forEach(item => {
+          if (typeof item === 'string' && item.trim()) bucket.add(item.trim());
+        });
+      };
+      addStrings(freeDict.synonyms, synonyms);
+      addStrings(freeDict.antonyms, antonyms);
+      (freeDict.meanings || []).forEach(meaning => {
+        addStrings(meaning.synonyms, synonyms);
+        addStrings(meaning.antonyms, antonyms);
+        (meaning.definitions || []).forEach(def => {
+          addStrings(def.synonyms, synonyms);
+          addStrings(def.antonyms, antonyms);
+        });
+      });
+      wiktionary.synonyms = [...synonyms].filter(Boolean).slice(0, 20);
+      wiktionary.antonyms = [...antonyms].filter(Boolean).slice(0, 20);
     }
 
-    .panel-subtitle {
-      font-size: 11px;
-      color: var(--outline);
+    return wiktionary;
+  }
+
+  function normalizeFreeDictionary(entry) {
+    const phoneticInfo = getPhoneticInfo(entry);
+    const synonyms = new Set();
+    const antonyms = new Set();
+
+    const collectTerms = values => {
+      if (!Array.isArray(values)) return;
+      values.forEach(item => {
+        if (!item) return;
+        if (typeof item === 'string') {
+          synonyms.add(item);
+          return;
+        }
+      });
+    };
+
+    const collectSynonyms = values => {
+      if (!Array.isArray(values)) return;
+      values.forEach(item => {
+        if (!item) return;
+        if (typeof item === 'string') synonyms.add(item);
+      });
+    };
+
+    const collectAntonyms = values => {
+      if (!Array.isArray(values)) return;
+      values.forEach(item => {
+        if (!item) return;
+        if (typeof item === 'string') antonyms.add(item);
+      });
+    };
+
+    collectSynonyms(entry.synonyms);
+    collectAntonyms(entry.antonyms);
+
+    (entry.meanings || []).forEach(meaning => {
+      collectSynonyms(meaning.synonyms);
+      collectAntonyms(meaning.antonyms);
+      (meaning.definitions || []).forEach(def => {
+        collectSynonyms(def.synonyms);
+        collectAntonyms(def.antonyms);
+      });
+    });
+
+    return {
+      word: entry.word || '',
+      phonetic: phoneticInfo.text || '',
+      audioUrl: phoneticInfo.audio ? normalizeAudio(phoneticInfo.audio) : null,
+      meanings: (entry.meanings || []).slice(0, 4).map(meaning => ({
+        partOfSpeech: meaning.partOfSpeech || '',
+        definitions: (meaning.definitions || []).slice(0, 4).map(def => ({
+          definition: def.definition || '',
+          example: def.example || ''
+        })).filter(item => item.definition)
+      })).filter(item => item.definitions.length),
+      synonyms: [...synonyms].filter(Boolean).slice(0, 20),
+      antonyms: [...antonyms].filter(Boolean).slice(0, 20),
+      source: 'Free Dictionary'
+    };
+  }
+
+  function getPhoneticInfo(entry) {
+    const phonetics = entry?.phonetics || [];
+    const withTextAndAudio = phonetics.find(item => item.text && item.audio);
+    if (withTextAndAudio) return { text: withTextAndAudio.text, audio: withTextAndAudio.audio };
+    const withAudio = phonetics.find(item => item.audio);
+    if (withAudio) return { text: withAudio.text || entry.phonetic || '', audio: withAudio.audio };
+    const withText = phonetics.find(item => item.text);
+    if (withText) return { text: withText.text, audio: null };
+    return { text: entry?.phonetic || '', audio: null };
+  }
+
+  function buildStorageEntry(data) {
+    const firstMeaning = data.meanings?.[0];
+    return {
+      word: data.word,
+      phonetic: data.phonetic || '',
+      pos: firstMeaning?.partOfSpeech || '',
+      definition: firstMeaning?.definitions?.[0]?.definition || '',
+      source: data.source || ''
+    };
+  }
+
+  function renderLoading(word) {
+    popup.innerHTML = `
+      ${headerHTML()}
+      <div class="dict-word-section">
+        <div class="dict-word-row">
+          <div class="dict-word">${escapeHTML(word)}</div>
+        </div>
+      </div>
+      <div class="dict-loading-section">
+        <div class="dict-skeleton dict-skeleton-word"></div>
+        <div class="dict-skeleton dict-skeleton-ph"></div>
+        <div class="dict-skeleton dict-skeleton-line1"></div>
+        <div class="dict-skeleton dict-skeleton-line2"></div>
+        <div class="dict-skeleton dict-skeleton-line3"></div>
+      </div>
+    `;
+  }
+
+  function renderDefinition(data) {
+    const meaningsHTML = (data.meanings || []).map((meaning, index) => `
+      <div class="dict-meaning-block" style="animation-delay:${index * 40}ms">
+        ${meaning.partOfSpeech ? `<div class="dict-pos-chip">${escapeHTML(meaning.partOfSpeech)}</div>` : ''}
+        ${(meaning.definitions || []).slice(0, 3).map((def, defIndex) => `
+          <div class="dict-def-item ${defIndex > 0 ? 'dict-def-subsequent' : ''}">
+            ${(meaning.definitions || []).length > 1 ? `<span class="dict-def-num">${defIndex + 1}</span>` : ''}
+            <div>
+              <div class="dict-def">${makeClickable(def.definition)}</div>
+              ${def.example ? `<div class="dict-example">${escapeHTML(def.example)}</div>` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `).join('');
+
+    const synonymsHTML = (data.synonyms || []).length || (data.antonyms || []).length ? `
+      <div class="dict-syn-section">
+        ${(data.synonyms || []).length ? `
+          <div class="dict-syn-label">Synonyms</div>
+          <div class="dict-syn-chips">
+            ${data.synonyms.map(item => `<span class="dict-syn-chip dict-clickable-word" data-word="${escapeHTML(item.toLowerCase())}">${escapeHTML(item)}</span>`).join('')}
+          </div>
+        ` : ''}
+        ${(data.antonyms || []).length ? `
+          <div class="dict-syn-label" style="margin-top: 14px;">Antonyms</div>
+          <div class="dict-syn-chips">
+            ${data.antonyms.map(item => `<span class="dict-syn-chip dict-ant-chip dict-clickable-word" data-word="${escapeHTML(item.toLowerCase())}">${escapeHTML(item)}</span>`).join('')}
+          </div>
+        ` : ''}
+      </div>
+    ` : `<div class="dict-syn-section"><p class="dict-syn-empty">No synonyms or antonyms found.</p></div>`;
+
+    popup.innerHTML = `
+      ${headerHTML()}
+      <div class="dict-word-section">
+        <div class="dict-word-row">
+          <div>
+            <div class="dict-word">${escapeHTML(data.word)}</div>
+            ${data.phonetic ? `<div class="dict-phonetic">${escapeHTML(data.phonetic)}</div>` : ''}
+          </div>
+          <div class="dict-word-actions">
+            ${currentAudioUrl ? `
+              <button id="dict-audio-btn" class="dict-audio-btn" data-state="idle" aria-label="Play pronunciation" title="Play pronunciation">
+                <svg class="dict-audio-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                </svg>
+              </button>
+            ` : ''}
+            <button id="dict-star-btn" class="dict-star-btn" data-saved="${isCurrentSaved ? 'true' : 'false'}" aria-label="${isCurrentSaved ? 'Remove from saved words' : 'Save word'}" title="${isCurrentSaved ? 'Remove from saved words' : 'Save word'}">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="${isCurrentSaved ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="dict-divider"></div>
+      <div class="dict-meanings">${meaningsHTML || '<div class="dict-meaning-block"><div class="dict-def">No definitions found.</div></div>'}</div>
+      ${synonymsHTML}
+      <div class="dict-footer">
+        <span class="dict-hint-text"><span class="dict-hint-dot"></span>Click words inside definitions to keep exploring</span>
+        <span class="dict-source-label">${escapeHTML(data.source || '')}</span>
+      </div>
+    `;
+    positionPopup();
+  }
+
+  function renderError(word) {
+    popup.innerHTML = `
+      ${headerHTML()}
+      <div class="dict-error-section">
+        <div class="dict-error-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+        </div>
+        <div>
+          <div class="dict-error-title">No results for ${escapeHTML(word)}</div>
+          <div class="dict-error-body">QuickDictionary could not find this word in Wiktionary or Free Dictionary.</div>
+        </div>
+      </div>
+    `;
+    positionPopup();
+  }
+
+  function headerHTML() {
+    return `
+      <div class="dict-header dict-drag-handle" title="Drag to move">
+        <svg class="dict-logo" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" fill="currentColor" opacity="0.75"></path>
+        </svg>
+        <span class="dict-label">QuickDictionary</span>
+        <div class="dict-drag-dots" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        <button id="dict-close-btn" class="dict-close-btn" aria-label="Close" title="Close">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    `;
+  }
+
+  function startDrag(e) {
+    e.preventDefault();
+    isDragging = true;
+    wasDragged = false;
+    const rect = popup.getBoundingClientRect();
+    dragOffsetX = e.clientX - rect.left;
+    dragOffsetY = e.clientY - rect.top;
+    popup.classList.add('dragging');
+  }
+
+  function performDrag(e) {
+    if (!isDragging) return;
+    wasDragged = true;
+    const popupWidth = popup.offsetWidth || 348;
+    const popupHeight = popup.offsetHeight || 320;
+    const maxX = window.innerWidth - popupWidth - 4;
+    const maxY = window.innerHeight - popupHeight - 4;
+    const x = Math.max(4, Math.min(e.clientX - dragOffsetX, maxX));
+    const y = Math.max(4, Math.min(e.clientY - dragOffsetY, maxY));
+    popup.style.left = `${x}px`;
+    popup.style.top = `${y}px`;
+  }
+
+  function endDrag() {
+    if (!isDragging) return;
+    isDragging = false;
+    popup.classList.remove('dragging');
+    setTimeout(() => {
+      wasDragged = false;
+    }, 160);
+  }
+
+  function positionPopup() {
+    popup.classList.remove('hiding');
+    popup.classList.add('visible');
+    if (wasDragged) return;
+
+    requestAnimationFrame(() => {
+      const popupWidth = popup.offsetWidth || 348;
+      const popupHeight = popup.offsetHeight || 320;
+      let x = pointerX + POPUP_MARGIN;
+      let y = pointerY + POPUP_MARGIN;
+
+      if (x + popupWidth > window.innerWidth - POPUP_MARGIN) x = pointerX - popupWidth - POPUP_MARGIN;
+      if (y + popupHeight > window.innerHeight - POPUP_MARGIN) y = pointerY - popupHeight - POPUP_MARGIN;
+
+      popup.style.left = `${Math.max(POPUP_MARGIN, x)}px`;
+      popup.style.top = `${Math.max(POPUP_MARGIN, y)}px`;
+    });
+  }
+
+  function hidePopup() {
+    if (!popup.classList.contains('visible')) return;
+    stopAudio();
+    popup.classList.add('hiding');
+    popup.classList.remove('visible');
+    setTimeout(() => popup.classList.remove('hiding'), 250);
+  }
+
+  function playAudio() {
+    if (!currentAudioUrl) return;
+    const button = document.getElementById('dict-audio-btn');
+    if (!button) return;
+
+    if (currentAudio) {
+      stopAudio();
+      button.dataset.state = 'idle';
+      return;
     }
 
-    /* ── Tabs ── */
-    .tab-bar {
-      display: flex;
-      padding: 0 20px;
-      gap: 0;
-      border-bottom: 1px solid var(--outline-var);
-      flex-shrink: 0;
-    }
+    currentAudio = new Audio(currentAudioUrl);
+    button.dataset.state = 'playing';
+    currentAudio.addEventListener('ended', () => {
+      stopAudio();
+      const liveButton = document.getElementById('dict-audio-btn');
+      if (liveButton) liveButton.dataset.state = 'idle';
+    });
+    currentAudio.addEventListener('error', () => {
+      stopAudio();
+      const liveButton = document.getElementById('dict-audio-btn');
+      if (liveButton) {
+        liveButton.dataset.state = 'error';
+        setTimeout(() => {
+          if (liveButton) liveButton.dataset.state = 'idle';
+        }, 1500);
+      }
+    });
+    currentAudio.play().catch(() => {
+      stopAudio();
+      button.dataset.state = 'error';
+      setTimeout(() => {
+        if (button) button.dataset.state = 'idle';
+      }, 1500);
+    });
+  }
 
-    .tab-btn {
-      flex: 1;
-      padding: 11px 0 10px;
-      background: none;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: var(--outline);
-      font-family: 'Google Sans', sans-serif;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: color 200ms, border-color 200ms;
-      letter-spacing: 0.2px;
-    }
+  function stopAudio() {
+    if (!currentAudio) return;
+    currentAudio.pause();
+    currentAudio = null;
+  }
 
-    .tab-btn:hover { color: var(--on-surface-var); }
+  function toggleSave() {
+    if (!currentData) return;
+    chrome.runtime.sendMessage({ type: 'QD_TOGGLE_SAVED', entry: buildStorageEntry(currentData) }, response => {
+      isCurrentSaved = Boolean(response?.isSaved);
+      const button = document.getElementById('dict-star-btn');
+      const icon = button?.querySelector('svg');
+      if (button) {
+        button.dataset.saved = isCurrentSaved ? 'true' : 'false';
+        button.setAttribute('aria-label', isCurrentSaved ? 'Remove from saved words' : 'Save word');
+        button.setAttribute('title', isCurrentSaved ? 'Remove from saved words' : 'Save word');
+      }
+      if (icon) icon.setAttribute('fill', isCurrentSaved ? 'currentColor' : 'none');
+      showToast(isCurrentSaved ? 'Word saved' : 'Word removed');
+    });
+  }
 
-    .tab-btn.active {
-      color: var(--primary);
-      border-bottom-color: var(--primary);
-    }
+  function showToast(message) {
+    document.getElementById('dict-toast')?.remove();
+    const toast = document.createElement('div');
+    toast.id = 'dict-toast';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('visible'));
+    setTimeout(() => {
+      toast.classList.remove('visible');
+      setTimeout(() => toast.remove(), 220);
+    }, 1800);
+  }
 
-    /* ── Search bar ── */
-    .search-wrap {
-      padding: 12px 16px 8px;
-      flex-shrink: 0;
-    }
+  function sanitizeWord(word) {
+    return String(word || '').trim().replace(/^[^\p{L}'-]+|[^\p{L}'-]+$/gu, '');
+  }
 
-    .search-input {
-      width: 100%;
-      background: var(--surface-hi);
-      border: 1px solid var(--outline-var);
-      border-radius: 100px;
-      padding: 8px 16px 8px 38px;
-      color: var(--on-surface);
-      font-family: 'Google Sans Text', sans-serif;
-      font-size: 13px;
-      outline: none;
-      transition: border-color 200ms;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23938F99' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: 12px center;
-    }
+  function stripHTML(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+    return temp.textContent || temp.innerText || '';
+  }
 
-    .search-input:focus { border-color: var(--primary); }
-    .search-input::placeholder { color: var(--outline); }
+  function normalizeAudio(url) {
+    if (!url) return null;
+    return url.startsWith('//') ? `https:${url}` : url;
+  }
 
-    /* ── Word list ── */
-    .word-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 4px 0 8px;
-      scrollbar-width: thin;
-      scrollbar-color: var(--outline-var) transparent;
-    }
+  function makeClickable(text) {
+    return escapeHTML(text).replace(/\b[\p{L}][\p{L}'-]{1,}\b/gu, match => {
+      return `<span class="dict-clickable-word" data-word="${match.toLowerCase()}">${match}</span>`;
+    });
+  }
 
-    .word-list::-webkit-scrollbar { width: 4px; }
-    .word-list::-webkit-scrollbar-thumb { background: var(--outline-var); border-radius: 2px; }
-
-    .word-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 20px;
-      cursor: pointer;
-      transition: background 150ms;
-      border-radius: 0;
-    }
-
-    .word-item:hover { background: rgba(255,255,255,0.05); }
-    .word-item:active { background: rgba(255,255,255,0.09); }
-
-    .word-item-text { flex: 1; min-width: 0; }
-
-    .word-item-word {
-      font-family: 'Google Sans', sans-serif;
-      font-size: 14px;
-      font-weight: 500;
-      color: var(--on-surface);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .word-item-meta {
-      font-size: 11.5px;
-      color: var(--outline);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      margin-top: 1px;
-    }
-
-    .word-item-pos {
-      display: inline;
-      font-style: italic;
-      color: var(--primary);
-      margin-right: 4px;
-    }
-
-    .word-item-time {
-      font-size: 11px;
-      color: var(--outline);
-      flex-shrink: 0;
-    }
-
-    .star-toggle {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: var(--gold);
-      padding: 4px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 150ms, transform 150ms;
-      flex-shrink: 0;
-    }
-
-    .star-toggle:hover { background: rgba(242,201,76,0.12); transform: scale(1.15); }
-
-    /* ── Empty state ── */
-    .empty-state {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      padding: 40px 24px;
-      text-align: center;
-    }
-
-    .empty-icon {
-      width: 48px; height: 48px;
-      background: var(--surface-hi);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--outline);
-    }
-
-    .empty-title {
-      font-family: 'Google Sans', sans-serif;
-      font-size: 15px;
-      font-weight: 500;
-      color: var(--on-surface-var);
-    }
-
-    .empty-body {
-      font-size: 13px;
-      color: var(--outline);
-      line-height: 1.5;
-    }
-
-    /* ── Footer ── */
-    .panel-footer {
-      padding: 10px 20px 14px;
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      border-top: 1px solid var(--outline-var);
-      flex-shrink: 0;
-    }
-
-    .footer-btn {
-      background: none;
-      border: 1px solid var(--outline-var);
-      border-radius: 100px;
-      padding: 5px 14px;
-      font-family: 'Google Sans', sans-serif;
-      font-size: 12px;
-      color: var(--on-surface-var);
-      cursor: pointer;
-      transition: background 150ms, border-color 150ms, color 150ms;
-    }
-
-    .footer-btn:hover {
-      background: rgba(255,255,255,0.07);
-      border-color: var(--outline);
-      color: var(--on-surface);
-    }
-
-    .footer-btn.danger:hover {
-      background: rgba(242,184,181,0.1);
-      border-color: var(--error);
-      color: var(--error);
-    }
-
-    /* ── Divider in list ── */
-    .list-date-header {
-      padding: 8px 20px 4px;
-      font-size: 11px;
-      font-weight: 500;
-      letter-spacing: 0.6px;
-      text-transform: uppercase;
-      color: var(--outline);
-    }
-
-    /* ── Count badge ── */
-    .count-badge {
-      font-size: 11px;
-      color: var(--outline);
-      margin-left: auto;
-      padding-right: 2px;
-    }
-  </style>
-</head>
-<body>
-
-  <div class="panel-header">
-    <svg class="panel-logo" viewBox="0 0 24 24" fill="none">
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10
-        10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"
-        fill="currentColor"/>
-    </svg>
-    <div>
-      <div class="panel-title">Quick Dictionary</div>
-      <div class="panel-subtitle">Your word library</div>
-    </div>
-  </div>
-
-  <div class="tab-bar">
-    <button class="tab-btn active" data-panel="history">History</button>
-    <button class="tab-btn"        data-panel="saved">Saved ★</button>
-  </div>
-
-  <div class="search-wrap">
-    <input class="search-input" type="search" placeholder="Filter words…" id="search-input" autocomplete="off"/>
-  </div>
-
-  <div class="word-list" id="word-list"></div>
-
-  <div class="panel-footer">
-    <button class="footer-btn danger" id="clear-btn">Clear list</button>
-  </div>
-
-  <script src="history.js"></script>
-</body>
-</html>
+  function escapeHTML(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+})();
